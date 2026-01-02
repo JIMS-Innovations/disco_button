@@ -1,4 +1,4 @@
-#include "PiPlates.h" // Include the PiPlates C library header
+#include "../libpiplates/src/api/ppapi.h" // Include the PiPlates C library header
 #include <unistd.h>   // For the sleep function
 #include <stdio.h>    // For printf
 

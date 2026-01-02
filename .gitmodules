@@ -1,0 +1,3 @@
+[submodule "libpiplates"]
+	path = libpiplates
+	url = https://github.com/pi-plates/libpiplates.git
