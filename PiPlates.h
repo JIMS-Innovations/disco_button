@@ -1,13 +1,16 @@
 // Header for using the pi plates. It's not as complete as it could be
-// but its a good start. It relies on the wiringPi.h and wiringPiSPI.h headers
-// at the start of the code the PiPlateInitialize() function must be called to
+// but its a good start. It relies on the pigpio.h
+// at the start of the code gpioInitialise(); and PiPlateInitialize() function must be called to
 // set up the spi, then the functions are very similar to they used in the python code
 #define GPIObaseADDR 8
 #define RELAYbaseADDR 24
+#define MOTORbaseADDR 16
+#define RMAX 2000
 #define ppFRAME 25
 #define ppINT 22
 #define PiPlatesComLine 1
 #define PiPlatesComFreq 250000
+
 
 #pragma once
 #include <stdio.h>          /// IO functions
@@ -18,14 +21,14 @@
 #pragma once
 #include <unistd.h>         /// Used to fork and pipe
 
+#pragma once
+#include <ctype.h>         /// used for tolower()
 
 #pragma once
-#include <wiringPi.h>       /// for GPIO for raspberry
-
-#pragma once
-#include <wiringPiSPI.h>
+#include <pigpio.h>
 
 volatile double PiPlatesDACVcc = 0;
+volatile int HANDLE = 0;
 
 //////////////////////////////////
 /// Basic Pi Plates Functions ///
@@ -34,11 +37,10 @@ volatile double PiPlatesDACVcc = 0;
 /// Initializes the pi plate by setting up the SPI com ///
 void PiPlateInitialize()
 {
-    wiringPiSetupGpio();
-    pinMode(ppFRAME, OUTPUT);
-    pinMode(ppINT, INPUT);
-    pullUpDnControl(ppINT, PUD_UP);
-    wiringPiSPISetup(PiPlatesComLine, PiPlatesComFreq);
+    gpioSetMode(ppFRAME, PI_OUTPUT);
+    gpioSetMode(ppINT, PI_INPUT);
+    gpioSetPullUpDown(ppINT, PI_PUD_UP);
+    HANDLE = spiOpen(PiPlatesComLine, PiPlatesComFreq, 0);
 }
 
 /// The way all the DAC functions talk to the DAC pi plates ///
@@ -50,18 +52,19 @@ void ppCMD(char addr, char cmd, char param1, char param2, char bytes2return, cha
     arg[2] = param1;
     arg[3] = param2;
 
-    digitalWrite(ppFRAME, HIGH);
-    wiringPiSPIDataRW(PiPlatesComLine, arg, 4);
+    gpioWrite(ppFRAME, 1); //digitalWrite(ppFRAME, HIGH);
+    spiWrite(HANDLE, arg, 4); //wiringPiSPIDataRW(PiPlatesComLine, arg, 4);
+    usleep(1);
     if(bytes2return>0)
     {
         usleep(100);
         for(i=0;i<bytes2return;++i)
         {
-            wiringPiSPIDataRW(PiPlatesComLine, &resp[i], 1);
+            spiRead(HANDLE, &resp[i], 1); //wiringPiSPIDataRW(PiPlatesComLine, &resp[i], 1);
             usleep(1);
         }
     }
-    digitalWrite(ppFRAME, LOW);
+    gpioWrite(ppFRAME, 0); //digitalWrite(ppFRAME, LOW);
 
     return;
 }
@@ -75,21 +78,46 @@ void ppCMDr(char addr, char cmd, char param1, char param2, char bytes2return, ch
     arg[2] = param1;
     arg[3] = param2;
 
-    digitalWrite(ppFRAME, HIGH);
-    wiringPiSPIDataRW(PiPlatesComLine, arg, 4);
+    gpioWrite(ppFRAME, 1);
+    spiWrite(HANDLE, arg, 4);
     if(bytes2return>0)
     {
         usleep(100);
         for(i=0;i<bytes2return;++i)
-            wiringPiSPIDataRW(PiPlatesComLine, &resp[i], 1);
+            spiRead(HANDLE, &resp[i], 1);
     }
     usleep(1000);
-    digitalWrite(ppFRAME, LOW);
+    gpioWrite(ppFRAME, 0);
     usleep(1000);
 
     return;
 }
 
+/// The way all the motor functions talk to the motor plates ///
+void ppCMDm(char addr, char cmd, char param1, char param2, char bytes2return, char *resp)
+{
+    char arg[4], i;
+    arg[0] = addr + MOTORbaseADDR;
+    arg[1] = cmd;
+    arg[2] = param1;
+    arg[3] = param2;
+
+    gpioWrite(ppFRAME, 1); //digitalWrite(ppFRAME, HIGH);
+    spiWrite(HANDLE, arg, 4); //    wiringPiSPIDataRW(PiPlatesComLine, arg, 4);
+    if(bytes2return>0)
+    {
+        usleep(100);
+        for(i=0;i<bytes2return;++i)
+        {
+            spiRead(HANDLE, &resp[i], 1);  //            wiringPiSPIDataRW(PiPlatesComLine, &resp[i], 1);
+            usleep(1);
+        }
+    }
+    usleep(2000);
+    gpioWrite(ppFRAME, 0); //digitalWrite(ppFRAME, LOW);
+
+    return;
+}
 
 /////////////////////
 /// DAC Functions ///
@@ -275,3 +303,196 @@ char RelayBoard_relaySTATE(char addr)
 
 // Toggle the LED //
 #define RelayBoard_toggleLED(addr) ppCMDr(addr, 0x62, 0, 0, 0, NULL)
+
+
+/////////////////////////////
+/// Motor Board functions ///
+/////////////////////////////
+
+// Little function needed in stepperCONFIG //
+char parseRES(char res)
+{
+    switch(res)
+    {
+        case 'f':
+        case '1':
+            return 0;
+        case 'h':
+        case '2':
+            return 1;
+        case '4':
+            return 2;
+        case '8':
+            return 3;
+
+        default:
+            return -1;
+    }
+
+    return -1;
+}
+
+// Configures the motor dir: '+' or '-', resolution 'f', 'h', '4', or '8' //
+void stepperCONFIG(char addr, char motor, char dir, char resolution, short rate, char acceleration)
+{
+    char param1, param2;
+    int increment;
+
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+
+    if((dir!='+') && (dir!='-'))
+    {
+        printf("ERROR: incorrect direction parameter '+' or '-'\n");
+        return;
+    }
+
+    resolution = parseRES(resolution);
+    if(resolution == -1)
+    {
+        printf("ERROR: incorrect resolution value\n");
+        return;
+    }
+
+    if((rate>RMAX) || (rate<1))
+    {
+        printf("ERROR: incorrect rate value\n");
+        return;
+    }
+
+    if((acceleration>10) || (acceleration<0))
+    {
+        printf("ERROR: incorrect acceleration time 1-10\n");
+        return;
+    }
+
+    // Assemble Param1:|0|DIR|RES1|RES2|NA|RATE10|RATE9|RATE8|
+    param1 = (dir == '-') ? 0x40 : 0;
+    param1 += resolution<<4;
+    param1 += rate>>8;
+    // Assemble Param2:|RATE7-RATE0|
+    param2 = rate & 0x00FF;
+    ppCMDm(addr,(motor=='b') ? 0x11 : 0x10,param1,param2,0,NULL);
+    usleep(10000);      //Allow uP on board time to process
+    // Send 2nd set of parameters but with same command numbers to add acceleration
+    // increment. This is a 15 bit number with the upper5 bits being the integer value
+    // and the lower 10 bits being the fractional part
+    increment = (acceleration==0) ? 0 : (int)(1024*rate/(acceleration*RMAX)+0.5);
+    // Param1:|1|ACC14|ACC13|ACC12|ACC11|ACC10|ACC9|ACC10|
+    param1 = 0x80 + (increment>>8);
+    param2 = increment & 0x00FF;
+
+    ppCMDm(addr,(motor=='b') ? 0x11 : 0x10, param1, param2, 0, NULL);
+
+    usleep(400000);      // Allow board time to process
+
+    return;
+}
+
+// Moves motor steps as defined by stepperCONFIG //
+void stepperMOVE(char addr, char motor, unsigned short steps)
+{
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+
+    ppCMDm(addr, (motor=='b') ? 0x13 : 0x12, steps>>8, steps&0xFF, 0, NULL);
+}
+
+// starts motor as defined by stepperCONFIG //
+void stepperJOG(char addr, char motor)
+{
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+
+    ppCMDm(addr, (motor=='b') ? 0x15 : 0x14, 0, 0, 0, NULL);
+
+    return;
+}
+
+// Stops the motor when jogging //
+void stepperSTOP(char addr, char motor)
+{
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+
+    ppCMDm(addr, (motor=='b') ? 0x17 : 0x16, 0, 0, 0, NULL);
+
+    usleep(100000);
+
+    return;
+}
+
+// Changed the rate can be done mid jog //
+void stepperRATE(char addr, char motor, short rate)
+{
+    char param1, param2;
+
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+    if((rate>RMAX) || (rate<1))
+    {
+        printf("ERROR: incorrect rate value\n");
+        return;
+    }
+    // Assemble Param1:|0|0|0|0|0|RATE10|RATE9|RATE8|
+    param1 = (rate>>8);
+    // Assemble Param2:|RATE7-RATE0|
+    param2 = rate & 0xFF;
+    ppCMDm(addr, (motor=='b') ? 0x19 : 0x18, param1, param2, 0, NULL);
+
+    return;
+}
+
+// Shuts off power to motor //
+void stepperOFF(char addr, char motor)
+{
+    motor = tolower(motor);
+    if((motor!='a') && (motor!='b'))
+    {
+        printf("ERROR: incorrect stepper motor selection 'a' or 'b'\n");
+        return;
+    }
+
+    ppCMDm(addr, (motor=='b') ? 0x1F : 0x1E, 0, 0, 0, NULL);
+
+    return;
+}
+
+// Read INT flag register0 in MOTORplate //
+char getINTflag0(char addr)
+{
+    char resp;
+    ppCMDm(addr,0x06,0,0,1, &resp);
+    return resp;
+}
+
+
+/// LED functions ///
+// Set the motor plate LED //
+#define PiPlatesMotor_setLED(addr) ppCMDm(addr, 0x60, 0, 0, 0, NULL)
+
+// Turn off the led //
+#define PiPlatesMotor_clrLED(addr) ppCMDm(addr, 0x61, 0, 0, 0, NULL)
+
+// Toggle the led //
+#define PiPlatesMotor_toggleLED(addr) ppCMDm(addr, 0x62, 0, 0, 0, NULL)

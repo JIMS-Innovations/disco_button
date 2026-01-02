@@ -1,27 +1,50 @@
-#include "PiPlates.h" // Include the PiPlates C library header
-#include <unistd.h>   // For the sleep function
-#include <stdio.h>    // For printf
+#include "PiPlates.h"
 
-int main() {
+
+int main()
+{
     int k;
-    
-    // Initialize the Pi-Plates system
-    PiPlateInitialize(); 
+    char RelayState;
+    int RelayHandle;
 
-    // Loop through all 7 (RELAYplate) or 8 (RELAYplate2) relays
-    // Note: Original RELAYplate has 7 relays, RELAYplate2 has 8
-    for(k = 1; k < 7; ++k) { 
-        printf("Toggling Relay %d ON\\n", k);
-        // Turn on the specific relay (address 1, relay number k)
-        RelayBoard_relayON(1, k); 
-        sleep(1); // Wait for 1 second
+    gpioInitialise();
+    PiPlateInitialize();
 
-        printf("Toggling Relay %d OFF\\n", k);
-        // Turn off the specific relay (address 1, relay number k)
-        RelayBoard_relayOFF(1, k); 
-        sleep(1); // Wait for 1 second
+
+
+    for(k=1;k<7;++k)
+    {
+        /// Testing the relayON and RelayOFF functions ///
+//        RelayBoard_relayON(1,k);
+//        sleep(1);
+//        RelayBoard_relayOFF(1,k);
+//        sleep(1);
+
+        /// Testing the relayTOGGLE function ///
+        RelayBoard_relayTOGGLE(1,k);
+        sleep(1);
+
+        /// Testing the relayALL function ///
+//        RelayBoard_relayALL(1,k+3);
+//        sleep(1);
+
+        /// Testing the LED functions ///
+//        RelayBoard_setLED(1);
+//        sleep(1);
+//        RelayBoard_clrLED(1);
+//        sleep(1);
+
+//        RelayBoard_toggleLED(1);
+//        sleep(1);
     }
 
-    printf("Complete\\n");
+    /// Testing the RelayBoard_relaySTATE function ///
+    RelayState = RelayBoard_relaySTATE(1);
+    printf("RelayState: %i\n", RelayState);
+    sleep(1);
+
+    gpioTerminate();
+
+    printf("Complete\n");
     return 0;
 }
